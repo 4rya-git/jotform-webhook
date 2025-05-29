@@ -218,7 +218,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
         for (const product of products) {
             try {
                 const productInfo = await handleProduct(product);
-                orderLines.push([
+                orderLines.push([ 
                     0, 0, {
                         product_id: productInfo.product_id,
                         name: productInfo.name,
@@ -251,12 +251,15 @@ app.post('/webhook', upload.none(), async (req, res) => {
                     client_order_ref: `Jotform-${rawRequest.submissionID || uuidv4()}`,
                     note: specialInstructions,
                     // Shipping information
-                    street: shippingAddress.addr_line1,
-                    street2: shippingAddress.addr_line2,
-                    city: shippingAddress.city,
-                    zip: shippingAddress.postal,
-                    country_id: shippingSameAsBilling ? countryId : 
-                              (shippingAddress.country ? await getCountryId(shippingAddress.country) : null)
+                    shipping_address: {
+                        street: shippingAddress.addr_line1,
+                        street2: shippingAddress.addr_line2,
+                        city: shippingAddress.city,
+                        state_id: null, // Could add state mapping if needed
+                        zip: shippingAddress.postal,
+                        country_id: shippingSameAsBilling ? countryId : 
+                                  (shippingAddress.country ? await getCountryId(shippingAddress.country) : null)
+                    }
                 }]
             ], (err, id) => {
                 if (err) return reject(err);
@@ -264,53 +267,13 @@ app.post('/webhook', upload.none(), async (req, res) => {
             });
         });
 
-        // Step 4: Confirm the sale order
-        await new Promise((resolve, reject) => {
-            object.methodCall('execute_kw', [
-                ODOO_DB, uid, ODOO_PASSWORD,
-                'sale.order', 'action_confirm',
-                [saleOrderId]
-            ], (err, result) => {
-                if (err) {
-                    console.error('Order confirmation failed, but order was created. Error:', err);
-                    // Still resolve because order was created, just not confirmed
-                    return resolve(null);
-                }
-                resolve(result);
-            });
-        });
-
-        console.log(`Successfully created order ${saleOrderId}`);
-        res.status(200).json({
-            success: true,
-            orderId: saleOrderId,
-            customerId: customerId,
-            productsProcessed: orderLines.length
-        });
-
+        res.status(200).send(`Sale Order Created with ID: ${saleOrderId}`);
     } catch (error) {
-        console.error('Webhook processing error:', error.message, error.stack);
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
+        console.error('Error in webhook:', error);
+        res.status(500).send(`Error: ${error.message}`);
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'healthy',
-        odooConnected: !!uid,
-        timestamp: new Date().toISOString()
-    });
-});
-
 app.listen(PORT, () => {
-    console.log(`Webhook server listening on port ${PORT}`);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.log(`Server is running on port ${PORT}`);
 });
