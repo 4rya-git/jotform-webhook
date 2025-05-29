@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-
+const multer = require('multer');
 
 // Initialize Express app
 const app = express();
@@ -13,8 +13,12 @@ const ODOO_USER = process.env.ODOO_USER;
 const ODOO_PASSWORD = process.env.ODOO_PASSWORD;
 const ODOO_API_URL = "https://company30.odoo.com/web/dataset/call_kw";
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+// Configure multer (you can adjust the storage options as per your needs)
+const upload = multer(); // We don't need disk storage for just parsing form data
+
+// Middleware to parse JSON bodies and multipart/form-data
+app.use(express.json());  // For handling application/json
+app.use(upload.none());  // For handling multipart/form-data (when no file is uploaded)
 
 // Function to authenticate with Odoo
 async function authenticateOdoo() {
@@ -117,6 +121,9 @@ async function createInvoice(orderId, cookies) {
 // Webhook endpoint to receive data
 app.post("/webhook", async (req, res) => {
     try {
+        // The data from form submission is now available in req.body
+        console.log('Received Data:', req.body);  // Inspect the incoming data
+
         // Authenticate Odoo session
         const cookies = await authenticateOdoo();
 
