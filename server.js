@@ -51,7 +51,6 @@ app.post('/webhook', upload.none(), async (req, res) => {
                 if (err) return reject(err);
                 if (ids.length) return resolve(ids[0]);
 
-                // Create new customer if not found
                 object.methodCall('execute_kw', [
                     ODOO_DB, uid, ODOO_PASSWORD,
                     'res.partner', 'create',
@@ -63,7 +62,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
                         street2: billing.addr_line2,
                         city: billing.city,
                         zip: billing.postal,
-                        country_id: null // Add logic to map country name to ID if needed
+                        country_id: null // You can add logic to map country name to ID
                     }]
                 ], (err, newId) => {
                     if (err) return reject(err);
@@ -75,23 +74,17 @@ app.post('/webhook', upload.none(), async (req, res) => {
         // Step 2: Prepare order lines
         const orderLinePromises = products.map(product => {
             return new Promise((resolve, reject) => {
-                // Search for the product by name
                 object.methodCall('execute_kw', [
                     ODOO_DB, uid, ODOO_PASSWORD,
                     'product.product', 'search_read',
                     [[['name', '=', product.productName]]],
-                    { fields: ['id', 'product_tmpl_id', 'uom_id'], limit: 1 }
+                    { fields: ['id'], limit: 1 }
                 ], (err, result) => {
                     if (err) return reject(err);
-
-                    // If product found, use it; otherwise, create a new product
                     if (result.length) {
-                        const productId = result[0].id;
-                        const uomId = result[0].uom_id[0]; // Assuming uom_id is a tuple with ID
-                        return resolve([ 
+                        return resolve([
                             0, 0, {
-                                product_id: productId,
-                                product_uom: uomId,
+                                product_id: result[0].id,
                                 name: product.productName,
                                 product_uom_qty: product.quantity,
                                 price_unit: product.unitPrice
@@ -99,23 +92,20 @@ app.post('/webhook', upload.none(), async (req, res) => {
                         ]);
                     }
 
-                    // If product not found, create it
+                    // Product not found, create it
                     object.methodCall('execute_kw', [
                         ODOO_DB, uid, ODOO_PASSWORD,
                         'product.product', 'create',
                         [{
                             name: product.productName,
                             list_price: product.unitPrice,
-                            type: 'consu',  // or 'product' based on your use case
-                            uom_id: 1,  // Default unit of measure ID, adjust as needed
-                            categ_id: 1  // Default category ID, adjust as needed
+                            type: 'consu'
                         }]
                     ], (err, newId) => {
                         if (err) return reject(err);
-                        resolve([ 
+                        resolve([
                             0, 0, {
                                 product_id: newId,
-                                product_uom: 1,  // Set default UOM, adjust based on actual data
                                 name: product.productName,
                                 product_uom_qty: product.quantity,
                                 price_unit: product.unitPrice
@@ -126,10 +116,9 @@ app.post('/webhook', upload.none(), async (req, res) => {
             });
         });
 
-        // Wait for all order lines to be prepared
         const orderLines = await Promise.all(orderLinePromises);
 
-        // Step 3: Create the sale order
+        // Step 3: Create sale order
         const saleOrderId = await new Promise((resolve, reject) => {
             object.methodCall('execute_kw', [
                 ODOO_DB, uid, ODOO_PASSWORD,
@@ -155,7 +144,6 @@ app.post('/webhook', upload.none(), async (req, res) => {
                 resolve(result);
             });
         });
-
         res.status(200).send('Order received and processed');
     } catch (error) {
         console.error('Webhook error:', error.message, error.stack);
