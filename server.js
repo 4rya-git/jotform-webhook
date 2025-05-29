@@ -40,6 +40,29 @@ async function authenticateOdoo() {
     }
 }
 
+// Function to look up product by name or code (adjust if necessary)
+async function getProductIdByCodeOrName(productCode, cookies) {
+    const productPayload = {
+        model: 'product.product',
+        method: 'search_read',
+        args: [
+            [['default_code', '=', productCode]], // Searching by product code
+            ['id']  // Only fetch the ID
+        ]
+    };
+
+    try {
+        const response = await axios.post(ODOO_API_URL, productPayload, { headers: { Cookie: cookies } });
+        if (response.data.result && response.data.result.length > 0) {
+            return response.data.result[0].id;
+        } else {
+            throw new Error(`Product not found for code: ${productCode}`);
+        }
+    } catch (error) {
+        throw new Error("Error fetching product ID: " + error.message);
+    }
+}
+
 // Function to create Sale Order in Odoo
 async function createSaleOrder(orderData, cookies) {
     const partnerData = {
@@ -65,18 +88,29 @@ async function createSaleOrder(orderData, cookies) {
 
         const orderLines = [];
 
+        // Process products
         for (const productKey in orderData.q43_myProducts) {
             const productValue = orderData.q43_myProducts[productKey];
             for (const productInfo of Object.values(productValue)) {
+                const productCode = productInfo.item_0; // Product code
+                const quantity = parseInt(productInfo.item_1, 10); // Quantity
+                const sizeOrColor = productInfo.item_2; // Size/Color
+
+                // Fetch product ID from Odoo
+                const productId = await getProductIdByCodeOrName(productCode, cookies);
+
+                // Add product to order lines
                 const productData = {
-                    product_id: productInfo.item_0, // Product ID
-                    product_uom_qty: parseInt(productInfo.item_1, 10), // Quantity
+                    product_id: productId, // Product ID fetched from Odoo
+                    product_uom_qty: quantity, // Quantity
                     price_unit: 100.0 // Price per unit, ensure correct price is fetched from Odoo
                 };
+
                 orderLines.push([0, 0, productData]);
             }
         }
 
+        // Create Sale Order with order lines
         const saleOrderData = {
             partner_id: partnerId,
             order_line: orderLines,
@@ -121,8 +155,8 @@ async function createInvoice(orderId, cookies) {
 // Webhook endpoint to receive data
 app.post("/webhook", async (req, res) => {
     try {
-        // The data from form submission is now available in req.body
-        console.log('Received Data:', req.body);  // Inspect the incoming data
+        // Log the received data
+        console.log('Received Data:', req.body);
 
         // Authenticate Odoo session
         const cookies = await authenticateOdoo();
