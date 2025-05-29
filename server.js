@@ -138,7 +138,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
 
         // Parse product data from the special fields
         const products = rawRequest.q43_myProducts;
-        const orderLines = Object.values(products).map(product => {
+        let orderLines = Object.values(products).map(product => {
             return {
                 product_id: null,  // This will be updated after product search
                 name: product.item_1,  // Assuming item_1 is the product name or variant
@@ -159,10 +159,11 @@ app.post('/webhook', upload.none(), async (req, res) => {
                     name: orderLine.name,
                     product_uom_qty: orderLine.product_uom_qty,
                     price_unit: orderLine.price_unit
-                };
+                }
+            ];
         });
 
-        const orderLines = await Promise.all(orderLinePromises);
+        orderLines = await Promise.all(orderLinePromises);
 
         // Step 3: Create sale order
         const saleOrderId = await createSaleOrder(customerId, orderLines);
