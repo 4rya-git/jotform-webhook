@@ -213,6 +213,110 @@ async function getInvoiceDetails(invoiceId) {
     });
 }
 
+// Helper function to send invoice by email
+async function sendInvoiceByEmail(invoiceId) {
+    return new Promise((resolve, reject) => {
+        // First, get the email template for invoices
+        object.methodCall('execute_kw', [
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'mail.template', 'search',
+            [[['model', '=', 'account.move'], ['name', 'ilike', 'invoice']]]
+        ], (err, templateIds) => {
+            if (err) return reject(err);
+            
+            // Use the first invoice template found, or create a simple email
+            const templateId = templateIds.length > 0 ? templateIds[0] : null;
+            
+            if (templateId) {
+                // Send using template
+                object.methodCall('execute_kw', [
+                    ODOO_DB, uid, ODOO_PASSWORD,
+                    'mail.template', 'send_mail',
+                    [templateId, invoiceId],
+                    { 'force_send': true }
+                ], (sendErr, result) => {
+                    if (sendErr) return reject(sendErr);
+                    resolve(result);
+                });
+            } else {
+                // Create and send email manually
+                sendInvoiceEmailManually(invoiceId, resolve, reject);
+            }
+        });
+    });
+}
+
+// Helper function to send invoice email manually
+function sendInvoiceEmailManually(invoiceId, resolve, reject) {
+    // Get invoice details first
+    object.methodCall('execute_kw', [
+        ODOO_DB, uid, ODOO_PASSWORD,
+        'account.move', 'read',
+        [invoiceId],
+        { fields: ['name', 'partner_id', 'amount_total', 'currency_id'] }
+    ], (err, invoiceData) => {
+        if (err) return reject(err);
+        
+        const invoice = invoiceData[0];
+        
+        // Create email message
+        object.methodCall('execute_kw', [
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'mail.mail', 'create',
+            [{
+                'subject': `Invoice ${invoice.name}`,
+                'body_html': `
+                    <p>Dear Customer,</p>
+                    <p>Please find attached your invoice <strong>${invoice.name}</strong> for the amount of ${invoice.amount_total} ${invoice.currency_id[1]}.</p>
+                    <p>Thank you for your business!</p>
+                    <p>Best regards,<br/>Your Company</p>
+                `,
+                'email_to': '', // Will be set from partner
+                'model': 'account.move',
+                'res_id': invoiceId,
+                'auto_delete': true
+            }]
+        ], (createErr, mailId) => {
+            if (createErr) return reject(createErr);
+            
+            // Get partner email and update mail
+            object.methodCall('execute_kw', [
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'res.partner', 'read',
+                [invoice.partner_id[0]],
+                { fields: ['email'] }
+            ], (partnerErr, partnerData) => {
+                if (partnerErr) return reject(partnerErr);
+                
+                const customerEmail = partnerData[0].email;
+                
+                if (!customerEmail) {
+                    return reject(new Error('Customer email not found'));
+                }
+                
+                // Update mail with customer email
+                object.methodCall('execute_kw', [
+                    ODOO_DB, uid, ODOO_PASSWORD,
+                    'mail.mail', 'write',
+                    [mailId, { 'email_to': customerEmail }]
+                ], (updateErr) => {
+                    if (updateErr) return reject(updateErr);
+                    
+                    // Send the mail
+                    object.methodCall('execute_kw', [
+                        ODOO_DB, uid, ODOO_PASSWORD,
+                        'mail.mail', 'send',
+                        [mailId]
+                    ], (sendErr, result) => {
+                        if (sendErr) return reject(sendErr);
+                        resolve(mailId);
+                    });
+                });
+            });
+        });
+    });
+}
+
 const extractProductDetails = (rawRequest) => {
     const { q43_myProducts } = rawRequest;
 
@@ -343,14 +447,24 @@ app.post('/webhook', upload.none(), async (req, res) => {
         const invoiceDetails = await getInvoiceDetails(invoiceId);
         console.log('Invoice details:', invoiceDetails);
 
+        // Step 8: Send invoice by email
+        try {
+            const emailResult = await sendInvoiceByEmail(invoiceId);
+            console.log('Invoice email sent successfully:', emailResult);
+        } catch (emailError) {
+            console.warn('Failed to send invoice email:', emailError.message);
+            // Don't fail the entire process if email fails
+        }
+
         res.status(200).json({
             success: true,
-            message: 'Order received, processed, and invoice created',
+            message: 'Order received, processed, invoice created and email sent',
             saleOrderId: saleOrderId,
             invoiceId: invoiceId,
             invoiceNumber: invoiceDetails.name,
             invoiceTotal: invoiceDetails.amount_total,
             invoiceState: invoiceDetails.state,
+            emailSent: emailResult ? true : false,
             products: mappedResult,
             orderLines: odooOrderLines.length
         });
@@ -375,6 +489,7 @@ app.get('/health', (req, res) => {
 app.listen(PORT || 3000, () => {
     console.log(`Webhook server listening on port ${PORT || 3000}`);
 });
+
 // require('dotenv').config();
 // const express = require('express');
 // const multer = require('multer');
