@@ -126,94 +126,115 @@ async function confirmSaleOrder(saleOrderId) {
     });
 }
 
+const extractProductDetails = (rawRequest) => {
+    const { q43_myProducts } = rawRequest;
+
+    // Ensure 'products' is an array in the structure
+    if (!q43_myProducts || !Array.isArray(q43_myProducts.products) || q43_myProducts.products.length === 0) {
+        throw new Error('The products array inside q43_myProducts is empty or not defined.');
+    }
+
+    // Initialize the mapped products array
+    const mappedProducts = [];
+
+    // Iterate over the products inside q43_myProducts
+    q43_myProducts.products.forEach((product, index) => {
+        const specialKey = `special_100${index + 1}`;
+        const specialDetails = q43_myProducts[specialKey];
+
+        if (!specialDetails) {
+            console.warn(`No special details found for ${specialKey}. Skipping this product.`);
+            return;
+        }
+
+        // Create the mapped product object
+        const mappedProduct = {
+            product_id: specialKey,
+            product_name: product.productName,
+            unit_price: product.unitPrice,
+            currency: product.currency,
+            quantity: product.quantity,
+            subTotal: product.subTotal,
+            product_options: []
+        };
+
+        // Extract and map special details into product_options
+        Object.keys(specialDetails).forEach((key, idx) => {
+            const value = specialDetails[key];
+
+            switch (idx) {
+                case 0: // item_0 corresponds to quantity
+                    mappedProduct.product_options.push(`Quantity: ${value}`);
+                    break;
+                case 1: // item_1 corresponds to color or size
+                    if (key === 'item_1' && index < 2) {
+                        mappedProduct.product_options.push(`Color: ${value}`);
+                    } else {
+                        mappedProduct.product_options.push(`Size: ${value}`);
+                    }
+                    break;
+                case 2: // item_2 corresponds to size for the first two products
+                    if (key === 'item_2') {
+                        mappedProduct.product_options.push(`${product.productName} Size: ${value}`);
+                    }
+                    break;
+            }
+        });
+
+        // Add mapped product to the results array
+        mappedProducts.push(mappedProduct);
+    });
+
+    return mappedProducts;
+};
+
 // Main webhook route to handle incoming form submissions
 app.post('/webhook', upload.none(), async (req, res) => {
     try {
-        console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
-        
+        // console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
+
         // Parse the rawRequest field which contains the actual form data
         const rawRequest = JSON.parse(req.body.rawRequest);
-        
+        const mappedResult = extractProductDetails(rawRequest);
+
         const customerName = `${rawRequest.q2_fullName2.first} ${rawRequest.q2_fullName2.last}`;
         const customerEmail = rawRequest.q3_email3 || `${Date.now()}@noemail.com`;
         const contactNumber = rawRequest.q5_contactNumber.full || '';
         const billing = rawRequest.q4_billingAddress || {};
 
-        // Updated product mapping with correct pricing
-        const productMapping = {
-            'special_1001': { name: 'T-Shirt', price: 1.00 },
-            'special_1002': { name: 'Sweatshirt', price: 5.00 },
-            'special_1003': { name: 'Shoes', price: 10.00 }
-        };
+        console.log('Mapped products:', JSON.stringify(mappedResult, null, 2));
 
-        // Parse product data from the correct structure
-        const myProducts = rawRequest.q43_myProducts;
-        let orderLines = [];
-
-        // Process each product in the special items
-        for (const [productKey, productData] of Object.entries(myProducts)) {
-            // Skip non-product entries
-            if (productKey === 'products' || productKey === 'totalInfo') {
-                continue;
-            }
-
-            const mappedProduct = productMapping[productKey];
-            if (!mappedProduct) {
-                console.log(`Product ${productKey} not found in mapping`);
-                continue;
-            }
-
-            const quantity = parseInt(productData.item_0) || 1;
-            
-            // Build product description with options
-            let productDescription = mappedProduct.name;
-            const options = [];
-            
-            if (productData.item_1) {
-                options.push(`Color: ${productData.item_1}`);
-            }
-            if (productData.item_2) {
-                if (productKey === 'special_1001' || productKey === 'special_1002') {
-                    options.push(`Size: ${productData.item_2}`);
-                } else if (productKey === 'special_1003') {
-                    options.push(`Shoe Size: ${productData.item_2}`);
-                }
-            }
-            
-            if (options.length > 0) {
-                productDescription += ` (${options.join(', ')})`;
-            }
-
-            orderLines.push({
-                name: productDescription,
-                quantity: quantity,
-                price: mappedProduct.price,
-                productKey: productKey
-            });
-        }
-
-        console.log('Processed order lines:', orderLines);
-
-        if (orderLines.length === 0) {
+        if (mappedResult.length === 0) {
             throw new Error('No valid products found in the order');
         }
 
         // Step 1: Find or create customer
         const customerId = await createOrFindCustomer(customerName, customerEmail, contactNumber, billing);
 
-        // Step 2: Prepare Odoo order lines
+        // Step 2: Prepare Odoo order lines based on mappedResult
         const odooOrderLines = [];
-        for (const orderLine of orderLines) {
-            const productId = await findOrCreateProduct(orderLine.name, orderLine.price);
+        for (const product of mappedResult) {
+            // Create a formatted product name that includes the options
+            const productOptions = product.product_options.slice(1).join(', '); // Skip the first option (Quantity)
+            const formattedProductName = productOptions ? 
+                `${product.product_name} (${productOptions})` : 
+                product.product_name;
+
+            // Find or create the product in Odoo
+            const productId = await findOrCreateProduct(formattedProductName, product.unit_price);
+            
+            // Add to Odoo order lines
             odooOrderLines.push([
                 0, 0, {
                     product_id: productId,
-                    name: orderLine.name,
-                    product_uom_qty: orderLine.quantity,
-                    price_unit: orderLine.price
+                    name: formattedProductName,
+                    product_uom_qty: product.quantity,
+                    price_unit: product.unit_price
                 }
             ]);
         }
+
+        console.log('Prepared Odoo order lines:', JSON.stringify(odooOrderLines, null, 2));
 
         // Step 3: Create sale order
         const saleOrderId = await createSaleOrder(customerId, odooOrderLines);
@@ -227,7 +248,8 @@ app.post('/webhook', upload.none(), async (req, res) => {
             success: true,
             message: 'Order received and processed',
             saleOrderId: saleOrderId,
-            orderLines: orderLines
+            products: mappedResult,
+            orderLines: odooOrderLines.length
         });
 
     } catch (error) {

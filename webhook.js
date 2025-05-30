@@ -191,7 +191,7 @@ const extractProductDetails = (rawRequest) => {
 // Main webhook route to handle incoming form submissions
 app.post('/webhook', upload.none(), async (req, res) => {
     try {
-        console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
+        // console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
 
         // Parse the rawRequest field which contains the actual form data
         const rawRequest = JSON.parse(req.body.rawRequest);
