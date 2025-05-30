@@ -126,34 +126,52 @@ async function confirmSaleOrder(saleOrderId) {
     });
 }
 
-// Helper function to create an invoice from a sale order
+// Helper function to create invoice from sale order
 async function createInvoiceFromSaleOrder(saleOrderId) {
     return new Promise((resolve, reject) => {
+        // First, call the action to create invoice
         object.methodCall('execute_kw', [
             ODOO_DB, uid, ODOO_PASSWORD,
-            'sale.order', 'action_invoice_create',
-            [saleOrderId, { draft: false }]
+            'sale.order', '_create_invoices',
+            [saleOrderId]
         ], (err, invoiceIds) => {
             if (err) return reject(err);
+            
+            // _create_invoices returns an array of invoice IDs
             if (invoiceIds && invoiceIds.length > 0) {
-                resolve(invoiceIds[0]); // Return the invoice ID
+                resolve(invoiceIds[0]); // Return the first invoice ID
             } else {
-                reject(new Error('Invoice creation failed.'));
+                reject(new Error('No invoice was created'));
             }
         });
     });
 }
 
-// Helper function to validate (confirm) the invoice
-async function validateInvoice(invoiceId) {
+// Helper function to post/validate an invoice
+async function postInvoice(invoiceId) {
     return new Promise((resolve, reject) => {
         object.methodCall('execute_kw', [
             ODOO_DB, uid, ODOO_PASSWORD,
             'account.move', 'action_post',
-            [invoiceId] // This validates the invoice
+            [invoiceId]
         ], (err, result) => {
             if (err) return reject(err);
             resolve(result);
+        });
+    });
+}
+
+// Helper function to get invoice details
+async function getInvoiceDetails(invoiceId) {
+    return new Promise((resolve, reject) => {
+        object.methodCall('execute_kw', [
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'account.move', 'read',
+            [invoiceId],
+            { fields: ['name', 'state', 'amount_total', 'currency_id'] }
+        ], (err, result) => {
+            if (err) return reject(err);
+            resolve(result[0]);
         });
     });
 }
@@ -223,7 +241,7 @@ const extractProductDetails = (rawRequest) => {
 // Main webhook route to handle incoming form submissions
 app.post('/webhook', upload.none(), async (req, res) => {
     try {
-        // console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
+        console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
 
         // Parse the rawRequest field which contains the actual form data
         const rawRequest = JSON.parse(req.body.rawRequest);
@@ -256,7 +274,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
             const productId = await findOrCreateProduct(formattedProductName, product.unit_price);
             
             // Add to Odoo order lines
-            odooOrderLines.push([ 
+            odooOrderLines.push([
                 0, 0, {
                     product_id: productId,
                     name: formattedProductName,
@@ -276,19 +294,26 @@ app.post('/webhook', upload.none(), async (req, res) => {
         await confirmSaleOrder(saleOrderId);
         console.log('Sale order confirmed');
 
-        // Step 5: Create invoice from the sale order
+        // Step 5: Create invoice from sale order
         const invoiceId = await createInvoiceFromSaleOrder(saleOrderId);
-        console.log('Invoice created with ID:', invoiceId);
+        console.log('Created invoice with ID:', invoiceId);
 
-        // Step 6: Validate (confirm) the invoice
-        await validateInvoice(invoiceId);
-        console.log('Invoice validated and confirmed');
+        // Step 6: Post/validate the invoice (optional - makes it official)
+        await postInvoice(invoiceId);
+        console.log('Invoice posted and validated');
+
+        // Step 7: Get invoice details for response
+        const invoiceDetails = await getInvoiceDetails(invoiceId);
+        console.log('Invoice details:', invoiceDetails);
 
         res.status(200).json({
             success: true,
             message: 'Order received, processed, and invoice created',
             saleOrderId: saleOrderId,
             invoiceId: invoiceId,
+            invoiceNumber: invoiceDetails.name,
+            invoiceTotal: invoiceDetails.amount_total,
+            invoiceState: invoiceDetails.state,
             products: mappedResult,
             orderLines: odooOrderLines.length
         });
@@ -313,7 +338,6 @@ app.get('/health', (req, res) => {
 app.listen(PORT || 3000, () => {
     console.log(`Webhook server listening on port ${PORT || 3000}`);
 });
-
 
 // require('dotenv').config();
 // const express = require('express');
