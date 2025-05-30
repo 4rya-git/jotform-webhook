@@ -50,11 +50,11 @@ async function createOrFindCustomer(customerName, customerEmail, contactNumber, 
                     name: customerName,
                     email: customerEmail,
                     phone: contactNumber,
-                    street: billing.addr_line1,
-                    street2: billing.addr_line2,
-                    city: billing.city,
-                    zip: billing.postal,
-                    country_id: null // Country ID can be mapped here
+                    street: billing.addr_line1 || '',
+                    street2: billing.addr_line2 || '',
+                    city: billing.city || '',
+                    zip: billing.postal || '',
+                    country_id: null // You may need to map country names to IDs
                 }]
             ], (err, newId) => {
                 if (err) return reject(err);
@@ -75,7 +75,7 @@ async function findOrCreateProduct(productName, price) {
         ], (err, result) => {
             if (err) return reject(err);
             if (result.length > 0) {
-                return resolve(result[0].id);  // Return existing product ID
+                return resolve(result[0].id);
             }
 
             // Product not found, create a new one
@@ -85,11 +85,11 @@ async function findOrCreateProduct(productName, price) {
                 [{
                     name: productName,
                     list_price: price,
-                    type: 'consu' // Consumable product type
+                    type: 'consu'
                 }]
             ], (err, newId) => {
                 if (err) return reject(err);
-                resolve(newId);  // Return newly created product ID
+                resolve(newId);
             });
         });
     });
@@ -129,73 +129,127 @@ async function confirmSaleOrder(saleOrderId) {
 // Main webhook route to handle incoming form submissions
 app.post('/webhook', upload.none(), async (req, res) => {
     try {
+        console.log('Received webhook data:', JSON.stringify(req.body, null, 2));
+        
+        // Parse the rawRequest field which contains the actual form data
         const rawRequest = JSON.parse(req.body.rawRequest);
+        
         const customerName = `${rawRequest.q2_fullName2.first} ${rawRequest.q2_fullName2.last}`;
-        const customerEmail = rawRequest.q3_email3 || `${Date.now()}@noemail.com`; // fallback if email is empty
+        const customerEmail = rawRequest.q3_email3 || `${Date.now()}@noemail.com`;
         const contactNumber = rawRequest.q5_contactNumber.full || '';
         const billing = rawRequest.q4_billingAddress || {};
 
-        // Map product IDs to names and prices
+        // Updated product mapping with correct pricing
         const productMapping = {
             'special_1001': { name: 'T-Shirt', price: 1.00 },
             'special_1002': { name: 'Sweatshirt', price: 5.00 },
             'special_1003': { name: 'Shoes', price: 10.00 }
         };
 
-        // Parse product data
-        const products = rawRequest.q43_myProducts;
-        
-        let orderLines = Object.values(products).map(product => {
-            const mappedProduct = productMapping[product.id];
+        // Parse product data from the correct structure
+        const myProducts = rawRequest.q43_myProducts;
+        let orderLines = [];
 
-            if (!mappedProduct) {
-                return null; // Skip unmapped products
+        // Process each product in the special items
+        for (const [productKey, productData] of Object.entries(myProducts)) {
+            // Skip non-product entries
+            if (productKey === 'products' || productKey === 'totalInfo') {
+                continue;
             }
 
-            return {
-                product_id: null,  // This will be updated after product search
-                name: mappedProduct.name,  // Map name from productMapping
-                product_uom_qty: parseInt(product.item_0),  // Quantity
-                price_unit: mappedProduct.price  // Price from productMapping
-            };
-        }).filter(line => line !== null);  // Filter out products that aren't mapped
+            const mappedProduct = productMapping[productKey];
+            if (!mappedProduct) {
+                console.log(`Product ${productKey} not found in mapping`);
+                continue;
+            }
+
+            const quantity = parseInt(productData.item_0) || 1;
+            
+            // Build product description with options
+            let productDescription = mappedProduct.name;
+            const options = [];
+            
+            if (productData.item_1) {
+                options.push(`Color: ${productData.item_1}`);
+            }
+            if (productData.item_2) {
+                if (productKey === 'special_1001' || productKey === 'special_1002') {
+                    options.push(`Size: ${productData.item_2}`);
+                } else if (productKey === 'special_1003') {
+                    options.push(`Shoe Size: ${productData.item_2}`);
+                }
+            }
+            
+            if (options.length > 0) {
+                productDescription += ` (${options.join(', ')})`;
+            }
+
+            orderLines.push({
+                name: productDescription,
+                quantity: quantity,
+                price: mappedProduct.price,
+                productKey: productKey
+            });
+        }
+
+        console.log('Processed order lines:', orderLines);
+
+        if (orderLines.length === 0) {
+            throw new Error('No valid products found in the order');
+        }
 
         // Step 1: Find or create customer
         const customerId = await createOrFindCustomer(customerName, customerEmail, contactNumber, billing);
 
-        // Step 2: Map products to Odoo order lines
-        const orderLinePromises = orderLines.map(async (orderLine) => {
-            const product = await findOrCreateProduct(orderLine.name, orderLine.price_unit);
-            return [
+        // Step 2: Prepare Odoo order lines
+        const odooOrderLines = [];
+        for (const orderLine of orderLines) {
+            const productId = await findOrCreateProduct(orderLine.name, orderLine.price);
+            odooOrderLines.push([
                 0, 0, {
-                    product_id: product,
+                    product_id: productId,
                     name: orderLine.name,
-                    product_uom_qty: orderLine.product_uom_qty,
-                    price_unit: orderLine.price_unit
+                    product_uom_qty: orderLine.quantity,
+                    price_unit: orderLine.price
                 }
-            ];
-        });
-
-        orderLines = await Promise.all(orderLinePromises);
+            ]);
+        }
 
         // Step 3: Create sale order
-        const saleOrderId = await createSaleOrder(customerId, orderLines);
+        const saleOrderId = await createSaleOrder(customerId, odooOrderLines);
+        console.log('Created sale order with ID:', saleOrderId);
 
         // Step 4: Confirm sale order
         await confirmSaleOrder(saleOrderId);
+        console.log('Sale order confirmed');
 
-        res.status(200).send('Order received and processed');
+        res.status(200).json({
+            success: true,
+            message: 'Order received and processed',
+            saleOrderId: saleOrderId,
+            orderLines: orderLines
+        });
+
     } catch (error) {
-        console.error('Webhook error:', error.message, error.stack);
-        res.status(500).send('Internal Server Error');
+        console.error('Webhook error:', error.message);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({
+            success: false,
+            error: 'Internal Server Error',
+            message: error.message
+        });
     }
 });
 
-// Start the webhook server
-app.listen(PORT, () => {
-    console.log(`Webhook server listening on port ${PORT}`);
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Start the webhook server
+app.listen(PORT || 3000, () => {
+    console.log(`Webhook server listening on port ${PORT || 3000}`);
+});
 
 // require('dotenv').config();
 // const express = require('express');
