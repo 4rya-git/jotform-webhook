@@ -158,14 +158,14 @@ async function createInvoiceFromSaleOrder(saleOrderId) {
                     ODOO_DB, uid, ODOO_PASSWORD,
                     'sale.order.line', 'read',
                     [saleOrder.order_line],
-                    { fields: ['product_id', 'name', 'quantity', 'price_unit'] }
+                    { fields: ['product_id', 'name', 'product_uom_qty', 'price_unit'] }
                 ], (lineErr, orderLines) => {
                     if (lineErr) return reject(lineErr);
                     
                     const invoiceLines = orderLines.map(line => [0, 0, {
                         'product_id': line.product_id[0],
                         'name': line.name,
-                        'quantity': line.quantity,
+                        'quantity': line.product_uom_qty,
                         'price_unit': line.price_unit
                     }]);
                     
