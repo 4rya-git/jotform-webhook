@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const xmlrpc = require('xmlrpc');
-const axios = require('axios');
 
 const app = express();
 const upload = multer();
@@ -47,7 +46,7 @@ async function createOrFindCustomer(customerName, customerEmail, contactNumber, 
             object.methodCall('execute_kw', [
                 ODOO_DB, uid, ODOO_PASSWORD,
                 'res.partner', 'create',
-                [({
+                [{
                     name: customerName,
                     email: customerEmail,
                     phone: contactNumber,
@@ -56,7 +55,7 @@ async function createOrFindCustomer(customerName, customerEmail, contactNumber, 
                     city: billing.city,
                     zip: billing.postal,
                     country_id: null // Country ID can be mapped here
-                })]
+                }]
             ], (err, newId) => {
                 if (err) return reject(err);
                 resolve(newId);
@@ -83,11 +82,11 @@ async function findOrCreateProduct(productName, price) {
             object.methodCall('execute_kw', [
                 ODOO_DB, uid, ODOO_PASSWORD,
                 'product.product', 'create',
-                [({
+                [{
                     name: productName,
                     list_price: price,
                     type: 'consu' // Consumable product type
-                })]
+                }]
             ], (err, newId) => {
                 if (err) return reject(err);
                 resolve(newId);  // Return newly created product ID
@@ -136,16 +135,16 @@ app.post('/webhook', upload.none(), async (req, res) => {
         const contactNumber = rawRequest.q5_contactNumber.full || '';
         const billing = rawRequest.q4_billingAddress || {};
 
-        // Parse product data from the special fields
-        const products = rawRequest.q43_myProducts;
-        
-        // Create a lookup for product names, prices, and attributes
+        // Map product IDs to names and prices
         const productMapping = {
-            'special_1001': { name: 'T-Shirt', price: 1.00, options: ['Size: XS', 'Color: Green'] },
-            'special_1002': { name: 'Sweatshirt', price: 5.00, options: ['Size: XS', 'Color: Green'] },
-            'special_1003': { name: 'Shoes', price: 10.00, options: ['Size: 8', 'Color: Green'] }
+            'special_1001': { name: 'T-Shirt', price: 1.00 },
+            'special_1002': { name: 'Sweatshirt', price: 5.00 },
+            'special_1003': { name: 'Shoes', price: 10.00 }
         };
 
+        // Parse product data
+        const products = rawRequest.q43_myProducts;
+        
         let orderLines = Object.values(products).map(product => {
             const mappedProduct = productMapping[product.id];
 
@@ -157,8 +156,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
                 product_id: null,  // This will be updated after product search
                 name: mappedProduct.name,  // Map name from productMapping
                 product_uom_qty: parseInt(product.item_0),  // Quantity
-                price_unit: mappedProduct.price,  // Price from productMapping
-                product_options: mappedProduct.options // Options (like color, size)
+                price_unit: mappedProduct.price  // Price from productMapping
             };
         }).filter(line => line !== null);  // Filter out products that aren't mapped
 
@@ -173,8 +171,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
                     product_id: product,
                     name: orderLine.name,
                     product_uom_qty: orderLine.product_uom_qty,
-                    price_unit: orderLine.price_unit,
-                    product_options: orderLine.product_options // Ensure options are added
+                    price_unit: orderLine.price_unit
                 }
             ];
         });
@@ -198,7 +195,6 @@ app.post('/webhook', upload.none(), async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Webhook server listening on port ${PORT}`);
 });
-
 
 
 // require('dotenv').config();
