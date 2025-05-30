@@ -448,12 +448,14 @@ app.post('/webhook', upload.none(), async (req, res) => {
         console.log('Invoice details:', invoiceDetails);
 
         // Step 8: Send invoice by email
+        let emailResult = null;
         try {
-            const emailResult = await sendInvoiceByEmail(invoiceId);
+            emailResult = await sendInvoiceByEmail(invoiceId);
             console.log('Invoice email sent successfully:', emailResult);
         } catch (emailError) {
             console.warn('Failed to send invoice email:', emailError.message);
             // Don't fail the entire process if email fails
+            emailResult = null;
         }
 
         res.status(200).json({
