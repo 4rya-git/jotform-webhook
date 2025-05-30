@@ -126,6 +126,38 @@ async function confirmSaleOrder(saleOrderId) {
     });
 }
 
+// Helper function to create an invoice from a sale order
+async function createInvoiceFromSaleOrder(saleOrderId) {
+    return new Promise((resolve, reject) => {
+        object.methodCall('execute_kw', [
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'sale.order', 'action_invoice_create',
+            [saleOrderId, { draft: false }]
+        ], (err, invoiceIds) => {
+            if (err) return reject(err);
+            if (invoiceIds && invoiceIds.length > 0) {
+                resolve(invoiceIds[0]); // Return the invoice ID
+            } else {
+                reject(new Error('Invoice creation failed.'));
+            }
+        });
+    });
+}
+
+// Helper function to validate (confirm) the invoice
+async function validateInvoice(invoiceId) {
+    return new Promise((resolve, reject) => {
+        object.methodCall('execute_kw', [
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'account.move', 'action_post',
+            [invoiceId] // This validates the invoice
+        ], (err, result) => {
+            if (err) return reject(err);
+            resolve(result);
+        });
+    });
+}
+
 const extractProductDetails = (rawRequest) => {
     const { q43_myProducts } = rawRequest;
 
@@ -224,7 +256,7 @@ app.post('/webhook', upload.none(), async (req, res) => {
             const productId = await findOrCreateProduct(formattedProductName, product.unit_price);
             
             // Add to Odoo order lines
-            odooOrderLines.push([
+            odooOrderLines.push([ 
                 0, 0, {
                     product_id: productId,
                     name: formattedProductName,
@@ -244,10 +276,19 @@ app.post('/webhook', upload.none(), async (req, res) => {
         await confirmSaleOrder(saleOrderId);
         console.log('Sale order confirmed');
 
+        // Step 5: Create invoice from the sale order
+        const invoiceId = await createInvoiceFromSaleOrder(saleOrderId);
+        console.log('Invoice created with ID:', invoiceId);
+
+        // Step 6: Validate (confirm) the invoice
+        await validateInvoice(invoiceId);
+        console.log('Invoice validated and confirmed');
+
         res.status(200).json({
             success: true,
-            message: 'Order received and processed',
+            message: 'Order received, processed, and invoice created',
             saleOrderId: saleOrderId,
+            invoiceId: invoiceId,
             products: mappedResult,
             orderLines: odooOrderLines.length
         });
@@ -272,6 +313,7 @@ app.get('/health', (req, res) => {
 app.listen(PORT || 3000, () => {
     console.log(`Webhook server listening on port ${PORT || 3000}`);
 });
+
 
 // require('dotenv').config();
 // const express = require('express');
