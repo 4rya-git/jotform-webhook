@@ -126,23 +126,60 @@ async function confirmSaleOrder(saleOrderId) {
     });
 }
 
-// Helper function to create invoice from sale order
+// Helper function to create invoice from sale order (Simple approach)
 async function createInvoiceFromSaleOrder(saleOrderId) {
     return new Promise((resolve, reject) => {
-        // First, call the action to create invoice
+        // Get the sale order data first
         object.methodCall('execute_kw', [
             ODOO_DB, uid, ODOO_PASSWORD,
-            'sale.order', '_create_invoices',
-            [saleOrderId]
-        ], (err, invoiceIds) => {
+            'sale.order', 'read',
+            [saleOrderId],
+            { fields: ['partner_id', 'order_line', 'name'] }
+        ], (err, saleOrderData) => {
             if (err) return reject(err);
             
-            // _create_invoices returns an array of invoice IDs
-            if (invoiceIds && invoiceIds.length > 0) {
-                resolve(invoiceIds[0]); // Return the first invoice ID
-            } else {
-                reject(new Error('No invoice was created'));
-            }
+            const saleOrder = saleOrderData[0];
+            
+            // Create invoice directly
+            object.methodCall('execute_kw', [
+                ODOO_DB, uid, ODOO_PASSWORD,
+                'account.move', 'create',
+                [{
+                    'move_type': 'out_invoice',
+                    'partner_id': saleOrder.partner_id[0],
+                    'invoice_origin': saleOrder.name,
+                    'invoice_line_ids': []
+                }]
+            ], (createErr, invoiceId) => {
+                if (createErr) return reject(createErr);
+                
+                // Get order lines and create invoice lines
+                object.methodCall('execute_kw', [
+                    ODOO_DB, uid, ODOO_PASSWORD,
+                    'sale.order.line', 'read',
+                    [saleOrder.order_line],
+                    { fields: ['product_id', 'name', 'quantity', 'price_unit'] }
+                ], (lineErr, orderLines) => {
+                    if (lineErr) return reject(lineErr);
+                    
+                    const invoiceLines = orderLines.map(line => [0, 0, {
+                        'product_id': line.product_id[0],
+                        'name': line.name,
+                        'quantity': line.quantity,
+                        'price_unit': line.price_unit
+                    }]);
+                    
+                    // Update invoice with lines
+                    object.methodCall('execute_kw', [
+                        ODOO_DB, uid, ODOO_PASSWORD,
+                        'account.move', 'write',
+                        [invoiceId, { 'invoice_line_ids': invoiceLines }]
+                    ], (updateErr) => {
+                        if (updateErr) return reject(updateErr);
+                        resolve(invoiceId);
+                    });
+                });
+            });
         });
     });
 }
@@ -338,7 +375,6 @@ app.get('/health', (req, res) => {
 app.listen(PORT || 3000, () => {
     console.log(`Webhook server listening on port ${PORT || 3000}`);
 });
-
 // require('dotenv').config();
 // const express = require('express');
 // const multer = require('multer');
